@@ -19,15 +19,13 @@ def evaluate_model_rknn(test_loader, device, criterion=None):
     running_loss = 0
     running_corrects = 0
 
-    for i, inputs in tqdm(enumerate(test_loader.data)):
+    for inputs, labels in tqdm(test_loader):
 
-        labels = test_loader.targets[i]
-        inputs = cv2.cvtColor(inputs, cv2.COLOR_BGR2RGB).astype(np.float32)
-        for j in range(3):
-            inputs[:, :, j] = (inputs[:, :, j] - mean[j]) / std[j]
-        # inputs = np.transpose(inputs, (2, 0, 1))
+        inputs = inputs.to(device).numpy()
+        labels = labels.to(device).numpy()
+        inputs = np.transpose(inputs, (0, 2, 3, 1))
 
-        outputs = rknn.inference(inputs=[inputs])
+        outputs = rknn.inference(inputs=[inputs[0]])
         # np.array(outputs[0][0])
         _, preds = torch.max(torch.tensor(outputs[0]), 1)
 
@@ -38,10 +36,10 @@ def evaluate_model_rknn(test_loader, device, criterion=None):
 
         # statistics
         running_loss += loss * inputs.shape[0]
-        running_corrects += torch.sum(preds == labels)
+        running_corrects += torch.sum(preds == torch.tensor(labels))
 
-    eval_loss = running_loss / len(test_loader.data)
-    eval_accuracy = running_corrects / len(test_loader.data)
+    eval_loss = running_loss / len(test_loader)
+    eval_accuracy = running_corrects / len(test_loader)
 
     return eval_loss, eval_accuracy
 
@@ -117,6 +115,7 @@ if __name__ == '__main__':
                 # optimization_level=0,
                 # quantized_dtype='dynamic_fixed_point-i8',
                 target_platform='rv1126',
+                # model_data_format='nchw',
                 )
     print('done')
 
@@ -155,15 +154,15 @@ if __name__ == '__main__':
 
     _, test_loader = prepare_dataloader(num_workers=8,
                                         eval_batch_size=256)
-    rknn_loader = prepare_dataloader_rknn(num_workers=8, eval_batch_size=1)
+    _, rknn_loader = prepare_dataloader(num_workers=8, eval_batch_size=1)
 
     quantized_jit_model = load_torchscript_model(
         model_filepath=quantized_model_filepath, device=cpu_device)
 
     _, int8_rknn_accuracy = evaluate_model_rknn(rknn_loader, cpu_device)
 
-    _, int8_eval_accuracy = evaluate_model_torch(model=quantized_jit_model,
-                                           test_loader=rknn_loader,
+    _, int8_eval_accuracy = evaluate_model(model=quantized_jit_model,
+                                           test_loader=test_loader,
                                            device=cpu_device,
                                            criterion=None)
 

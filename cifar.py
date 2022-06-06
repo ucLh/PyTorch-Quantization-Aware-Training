@@ -242,7 +242,9 @@ def save_torchscript_model(model, model_dir, model_filename):
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
     model_filepath = os.path.join(model_dir, model_filename)
-    torch.jit.save(torch.jit.script(model), model_filepath)
+    input_ = torch.rand(size=(1, 3, 32, 32)).to('cpu')
+    traced_model = torch.jit.trace(model, input_)
+    torch.jit.save(traced_model, model_filepath)
 
 
 def load_torchscript_model(model_filepath, device):
@@ -256,7 +258,7 @@ def create_model(num_classes=10):
 
     # The number of channels in ResNet18 is divisible by 8.
     # This is required for fast GEMM integer matrix multiplication.
-    # model = torchvision.models.resnet18(pretrained=False)
+    # model = torchvision.models.quantization.resnet18(pretrained=False, num_classes=num_classes)
     model = resnet18(num_classes=num_classes, pretrained=False)
 
     # We would use the pretrained ResNet18 as a feature extractor.
@@ -325,6 +327,7 @@ def main():
     num_classes = 10
     cuda_device = torch.device("cuda:0")
     cpu_device = torch.device("cpu:0")
+    torch.backends.quantized.engine = 'qnnpack'
 
     model_dir = "saved_models"
     model_filename = "resnet18_cifar10.pt"
@@ -348,8 +351,8 @@ def main():
                         train_loader=train_loader,
                         test_loader=test_loader,
                         device=cuda_device,
-                        learning_rate=1e-1,
-                        num_epochs=200)
+                        learning_rate=1e-2,
+                        num_epochs=100)
     # Save model.
     save_model(model=model, model_dir=model_dir, model_filename=model_filename)
     # Load a pretrained model.
@@ -404,15 +407,18 @@ def main():
     # Prepare the model for quantization aware training. This inserts observers in
     # the model that will observe activation tensors during calibration.
     quantized_model = QuantizedResNet18(model_fp32=fused_model)
+    # quantized_model = torchvision.models.quantization.resnet18(pretrained=True, num_classes=num_classes)
     # Using un-fused model will fail.
     # Because there is no quantized layer implementation for a single batch normalization layer.
     # quantized_model = QuantizedResNet18(model_fp32=model)
     # Select quantization schemes from
     # https://pytorch.org/docs/stable/quantization-support.html
-    quantization_config = torch.quantization.get_default_qconfig("fbgemm")
+    quantization_config = torch.quantization.get_default_qat_qconfig("qnnpack")
     # Custom quantization configurations
     # quantization_config = torch.quantization.default_qconfig
-    # quantization_config = torch.quantization.QConfig(activation=torch.quantization.MinMaxObserver.with_args(dtype=torch.quint8), weight=torch.quantization.MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric))
+    # quantization_config = torch.quantization.QConfig(
+    #     activation=torch.quantization.MinMaxObserver.with_args(dtype=torch.quint8),
+    #     weight=torch.quantization.MinMaxObserver.with_args(dtype=torch.qint8, qscheme=torch.per_tensor_symmetric))
 
     quantized_model.qconfig = quantization_config
 
@@ -430,7 +436,7 @@ def main():
                 test_loader=test_loader,
                 device=cuda_device,
                 learning_rate=1e-3,
-                num_epochs=10)
+                num_epochs=5)
     quantized_model.to(cpu_device)
 
     # Using high-level static quantization wrapper
