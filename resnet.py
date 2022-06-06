@@ -61,6 +61,35 @@ def conv1x1(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
                      bias=False)
 
 
+class SEBlock(nn.Module):
+
+    def __init__(self, channel, reduction=16):
+        super(SEBlock, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+
+        self.linear1 = nn.Linear(channel, channel // reduction)
+        self.relu = nn.ReLU()
+        self.linear2 = nn.Linear(channel // reduction, channel)
+        self.sigmoid = nn.Sigmoid()
+
+        self.multiply = torch.nn.quantized.FloatFunctional()
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x)
+        y = y.view(b, c)
+
+        y = self.linear1(y)
+        y = self.relu(y)
+        y = self.linear2(y)
+        y = self.sigmoid(y)
+        y = y.view(b, c, 1, 1)
+
+        res = self.multiply.mul(x, y)
+
+        return res
+
+
 class BasicBlock(nn.Module):
     expansion: int = 1
 
@@ -73,7 +102,8 @@ class BasicBlock(nn.Module):
             groups: int = 1,
             base_width: int = 64,
             dilation: int = 1,
-            norm_layer: Optional[Callable[..., nn.Module]] = None) -> None:
+            norm_layer: Optional[Callable[..., nn.Module]] = None,
+            use_se: bool = True) -> None:
         super(BasicBlock, self).__init__()
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -95,6 +125,9 @@ class BasicBlock(nn.Module):
         self.skip_add = nn.quantized.FloatFunctional()
         # Remember to use two independent ReLU for layer fusion.
         self.relu2 = nn.ReLU(inplace=True)
+        self.use_se = use_se
+        if self.use_se:
+            self.se = SEBlock(planes)
 
     def forward(self, x: Tensor) -> Tensor:
         identity = x
@@ -105,6 +138,9 @@ class BasicBlock(nn.Module):
 
         out = self.conv2(out)
         out = self.bn2(out)
+
+        if self.use_se:
+            out = self.se(out)
 
         if self.downsample is not None:
             identity = self.downsample(x)
